@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"log"
 	"math/rand"
@@ -17,6 +18,18 @@ type sprite struct {
 	row int
 	col int
 }
+type config struct {
+	Player   string `json:"player"`
+	Ghost    string `json:"ghost"`
+	Wall     string `json:"wall"`
+	Dot      string `json:"dot"`
+	Pill     string `json:"pill"`
+	Death    string `json:"death"`
+	Space    string `json:"space"`
+	UseEmoji bool   `json:"use_emoji"`
+}
+
+var cfg config
 
 var player sprite //创建一个精灵类型的玩家
 
@@ -25,6 +38,22 @@ var ghosts []*sprite //创建幽灵，和精灵的创建不同没有直接存储
 var score int   //记录精灵的得分
 var numDots int // 记录点数，精灵吃到一个点就得分
 var lives = 1   //表示精灵的生命
+
+//解析jason，并且把内容存在全局变量cfg中
+func loadConfig(file string) error {
+	f, err := os.Open(file)
+	if err != nil {
+		return err
+	}
+	defer f.Close() //文件打开了，后续必然要关闭
+
+	decoder := json.NewDecoder(f)
+	err = decoder.Decode(&cfg)
+	if err != nil {
+		return err
+	}
+	return nil
+}
 
 // 启动Cbreak模式
 func initialise() {
@@ -57,6 +86,15 @@ func moveGhosts() {
 		dir := drawDirection()                     // 随机得到一个方向移动的指令
 		g.row, g.col = makeMove(g.row, g.col, dir) // makeMove return 移动过后的位置
 
+	}
+}
+
+// 调整水平位移：否则地图会变形，因为emoj的加入
+func moveCursor(row, col int) {
+	if cfg.UseEmoji {
+		simpleansi.MoveCursor(row, col*2)
+	} else {
+		simpleansi.MoveCursor(row, col)
 	}
 }
 
@@ -139,12 +177,21 @@ func makeMove(oldRow, oldCol int, dir string) (newRow, newCol int) {
 // 更新精灵玩家的信息
 func movePlayer(dir string) {
 	player.row, player.col = makeMove(player.row, player.col, dir)
+
+	removeDot := func(row, col int) {
+		maze[row] = maze[row][0:col] + " " + maze[row][col+1:]
+	}
+
 	switch maze[player.row][player.col] {
 	case '.': //玩家的新位置在点上的话，玩家要吃了那个点然后得分
 		numDots--
 		score++
-		maze[player.row] = maze[player.row][0:player.col] + " " + maze[player.row][player.col+1:]
+		removeDot(player.row, player.col)
+	case 'X':
+		score += 10
+		removeDot(player.row, player.col)
 	}
+
 }
 
 func printScreen() {
@@ -153,20 +200,20 @@ func printScreen() {
 		for _, chr := range line {
 			switch chr { // 刷新屏幕的时候，不将全部的图片打印下来，只打印障碍物
 			case '#':
-				fallthrough //fmt.Printf("%c", chr) // fallthrough 会去掉go中隐式的 break；
+				fmt.Print(simpleansi.WithBlueBackground(cfg.Wall)) //fallthrough //fmt.Printf("%c", chr) // fallthrough 会去掉go中隐式的 break；
 			case '.':
-				fmt.Printf("%c", chr) //需要把点字符在屏幕上也要显示
+				fmt.Print(cfg.Dot)
 			default:
-				fmt.Print(" ")
+				fmt.Print(cfg.Space)
 			}
 		}
+		fmt.Println()
 	}
-	simpleansi.MoveCursor(player.row, player.row) // 在任意位置打印玩家
-	fmt.Print("P")
-
+	moveCursor(player.row, player.col)
+	fmt.Print(cfg.Player)
 	for _, g := range ghosts {
 		simpleansi.MoveCursor(g.row, g.col)
-		fmt.Print("G")
+		fmt.Print(cfg.Ghost)
 	}
 
 	simpleansi.MoveCursor(len(maze)+1, 0)
@@ -213,10 +260,14 @@ func main() {
 		return
 	}
 
+	err = loadConfig("config.json")
+	if err != nil {
+		log.Println("failend to load configuration:", err)
+		return
+	}
+
 	// game loop
 	for {
-		// update screen
-		printScreen()
 
 		// process input
 		input := make(chan string) //创建一个名字叫input的通道
@@ -247,8 +298,16 @@ func main() {
 			}
 		}
 
+		// update screen
+		printScreen()
+
 		// check game over
-		if numDots == 0 || lives <= 0 { //得不到分或者生命为0就退出
+		if numDots == 0 || lives == 0 { //得不到分或者生命为0就退出
+			if lives == 0 {
+				moveCursor(player.row, player.col)
+				fmt.Print(cfg.Death)
+				moveCursor(len(maze)+2, 0)
+			}
 			break
 		}
 
